@@ -1,35 +1,50 @@
 # ⚡ Task Terminal
 
-A sleek, retro-styled Unix terminal shell for tracking tasks and projects directly in your browser. Features folder-based organization, custom task IDs, ASCII progress tracking, activity heatmaps, live trend charts, and dual-mode persistence (browser storage + direct local disk sync).
-
-Ready for one-click deployment on **Vercel** as a high-performance static web application.
+A sleek, retro-styled Unix terminal shell for tracking tasks and projects directly in your browser. Features folder-based organization, custom task IDs, ASCII progress tracking, activity heatmaps, live trend charts, and **multi-device cloud synchronization with dedicated user accounts**.
 
 ---
 
-## 🚀 Quick Deployment to Vercel
+## ☁️ Multi-Device Cloud Sync & User Accounts
 
-### Option 1: Deploy via Vercel Dashboard (Recommended)
-1. Push this repository to GitHub (`main` branch).
-2. Go to [vercel.com/new](https://vercel.com/new).
-3. Import your **TASK** repository.
-4. Keep the default settings:
-   - **Framework Preset**: `Other`
-   - **Root Directory**: `./`
-   - **Build Command**: *(leave empty)*
-   - **Output Directory**: *(leave empty)*
-5. Click **Deploy**.
+Task Terminal supports dedicated user accounts backed by a cloud database (Upstash Redis / Vercel KV). Tasks you create on your desktop automatically sync to your phone, laptop, or any other browser you log into!
 
-### Option 2: Deploy via Vercel CLI
-```bash
-npm install -g vercel
-vercel
-```
+### Terminal Commands:
+- `register <username> <password>`: Create a free account. Your current tasks will automatically sync to your new cloud account.
+- `login <username> <password>`: Log in on any device (phone, laptop, iPad, work PC) to immediately load your synced tasks.
+- `logout`: Log out and return to local guest mode.
+- `whoami`: Display current session username, ID, and cloud sync status.
+- `sync`: Force an immediate push & pull sync with the cloud database.
+
+*(If you don't log in, Task Terminal still works seamlessly in offline/guest mode using local browser storage).*
+
+---
+
+## 🚀 Deployment & Cloud Database Setup on Vercel
+
+### Step 1: Deploy the Repo to Vercel
+1. Push this repository to GitHub (`main` branch):
+   ```bash
+   git add .
+   git commit -m "Add multi-device cloud sync and user accounts"
+   git push origin main
+   ```
+2. Go to [vercel.com/new](https://vercel.com/new) and import your **TASK** repository.
+3. Click **Deploy** (keep default settings).
+
+### Step 2: Connect Free Cloud Database (1-Click)
+To enable multi-device sync across all your devices:
+1. In your project page on the [Vercel Dashboard](https://vercel.com/dashboard), click the **Storage** tab.
+2. Click **Create Database** &rarr; select **KV** (or **Upstash Redis** from Marketplace).
+3. Click **Continue** &rarr; select **Free tier** &rarr; click **Create**.
+4. Vercel automatically links the database and injects `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
+5. Redeploy (or trigger a new deploy) — that's it! Your Task Terminal now has full cloud sync enabled.
 
 ---
 
 ## 🛠 Features
 
 - **Retro CRT Aesthetic**: Scanline effects, CRT vignette, responsive layout, and crisp typography powered by JetBrains Mono.
+- **Dedicated User Authentication**: Multi-device sync with secure password hashing (PBKDF2 SHA-512) and session tokens.
 - **Directory Hierarchy**: Organize tasks in nested categories (e.g., `company/`, `GATE/MATH/`, `frontend/`) using standard `mkdir`, `cd`, `pwd`, and `ls`.
 - **Fast Task Management**:
   - `touch "Task Name" #id t1` to create and assign short IDs.
@@ -41,11 +56,11 @@ vercel
   - `cat <id>` renders completion curves and a GitHub-style 30-day activity heatmap.
   - `tasks --tree` (or `tree`) prints a directory tree flowchart.
   - `stats` renders an ASCII overview of task distribution.
-- **Seamless Dual-Mode Persistence**:
-  - **Browser Storage (`localStorage`)**: Enabled out-of-the-box on Vercel and all mobile/desktop browsers. User edits and tasks persist reliably across browser reloads.
-  - **Direct Disk Sync (File System Access API)**: In Chromium browsers (Chrome, Edge, Brave), click the status pill in the top-right or type `link` to select a `tasks_data.json` file on your local disk. All changes save directly to your filesystem in real-time.
-  - **Import & Export**: Use `export` to download your workspace JSON backup anytime, or `import` to upload and restore data on any device.
-  - **Reset**: Use `reset --confirm` to reload the initial workspace template from the server.
+- **Storage Options**:
+  - **Cloud Sync**: Auto-syncs across any device when logged in.
+  - **Local Disk Sync**: Link directly to a `tasks_data.json` file on your computer via File System Access API.
+  - **Local Browser Storage**: Automatic offline fallback.
+  - **Import & Export**: Use `export` to download a JSON backup or `import` to restore it.
 
 ---
 
@@ -53,6 +68,11 @@ vercel
 
 | Command | Arguments | Description |
 |---|---|---|
+| `register` / `signup` | `<user> <pass>` | Create a cloud account and sync tasks across devices |
+| `login` / `signin` | `<user> <pass>` | Log into your account from any phone or computer |
+| `logout` | | Sign out and return to guest mode |
+| `whoami` | | Display current user, session, and sync state |
+| `sync` | | Manually sync local and cloud databases |
 | `help` / `?` | | Display all available terminal commands |
 | `man` | `<command>` | View manual page, synopsis, and examples for a command |
 | `ls` | `[-l] [dir]` | List category folders & tasks (use `-l` for detailed table) |
@@ -89,12 +109,20 @@ vercel
 ## 📁 Project Structure
 
 ```
+├── api/
+│   ├── auth.js        # Serverless API: /api/auth (register, login, me)
+│   ├── tasks.js       # Serverless API: /api/tasks (GET / POST user tasks)
+│   └── lib/
+│       └── db.js      # Upstash Redis client, PBKDF2 hashing, session tokens
+├── test/
+│   └── api-test.js    # Automated integration test suite
 ├── index.html         # Main entry point (served at / by Vercel)
 ├── tasks.html         # Compatibility redirect bridge
 ├── tasks.css          # Terminal UI, CRT overlay, responsive layout
-├── tasks.js           # Core terminal engine, command interpreter, persistence
-├── tasks_data.json    # Initial seed data / portable JSON schema
-├── vercel.json        # Vercel routing, clean URLs & cache-control configuration
+├── tasks.js           # Core terminal engine, auth flow, persistence
+├── tasks_data.json    # Starter template / portable JSON schema
+├── vercel.json        # Vercel routing, clean URLs & cache configuration
+├── package.json       # Node package descriptor
 ├── .gitignore         # Git ignore rules
 └── README.md          # Documentation
 ```

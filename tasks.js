@@ -4,9 +4,17 @@
 
 const DB_FILENAME = "tasks_data.json";
 const LS_FALLBACK_KEY = "task-terminal-fallback-v1";
+const AUTH_TOKEN_KEY = "task-terminal-auth-token-v1";
+const AUTH_USER_KEY = "task-terminal-auth-user-v1";
 const IDB_NAME = "TaskTerminalDB";
 const IDB_STORE = "file_handles";
 const IDB_KEY = "tasks_data_handle";
+
+let currentUser = null; // { id, username } if authenticated
+let cloudSyncing = false;
+let lastCloudSyncTime = null;
+let cloudSyncError = null;
+let cloudDebounceTimer = null;
 
 let state = {
   tasks: [],       // { id, name, category, status, createdAt, dueDate, notes, history: [{date, action, note}], progress }
@@ -77,9 +85,14 @@ function updatePrompt() {
   if (p) {
     p.textContent = currentDir === "~" ? "~" : `~/${currentDir}`;
   }
+  const promptUser = document.getElementById("prompt-user");
+  if (promptUser) {
+    promptUser.textContent = currentUser ? `${currentUser.username}@tasks` : "guest@tasks";
+  }
   const termTitle = document.getElementById("terminal-title");
   if (termTitle) {
-    termTitle.textContent = `task-terminal — ${currentDir === "~" ? "~" : currentDir}`;
+    const userPrefix = currentUser ? `${currentUser.username}@tasks` : "guest@tasks";
+    termTitle.textContent = `task-terminal — ${userPrefix}:${currentDir === "~" ? "~" : currentDir}`;
   }
 }
 
@@ -225,14 +238,93 @@ async function getStoredFileHandle() {
 }
 
 // ------------------------------------------------------------
-// Persistence — File System Access API + IndexedDB + Fallbacks
+// Cloud API & Persistence — Multi-device Sync & Storage
 // ------------------------------------------------------------
+
+async function registerUser(username, password) {
+  const res = await fetch("/api/auth?action=register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.details || "Registration failed");
+  return data;
+}
+
+async function loginUser(username, password) {
+  const res = await fetch("/api/auth?action=login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.details || "Login failed");
+  return data;
+}
+
+async function verifyCurrentUser(token) {
+  try {
+    const res = await fetch("/api/auth?action=me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.user || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function fetchCloudTasks(token) {
+  const res = await fetch("/api/tasks", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.details || "Failed to fetch cloud tasks");
+  }
+  return data;
+}
+
+async function saveCloudTasks(token, tasksState) {
+  const res = await fetch("/api/tasks", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(tasksState),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.details || "Failed to save cloud tasks");
+  }
+  return data;
+}
 
 function supportsFileSystemAccess() {
   return "showSaveFilePicker" in window && "showOpenFilePicker" in window;
 }
 
 function updateSaveStatus() {
+  if (currentUser) {
+    if (cloudSyncError) {
+      saveStatus.textContent = `●  cloud: ${currentUser.username} (sync warning)`;
+      saveStatus.className = "tb-status unsaved";
+      saveStatus.title = `Cloud sync warning: ${cloudSyncError}. Click to view info.`;
+    } else if (cloudSyncing) {
+      saveStatus.textContent = `●  cloud: ${currentUser.username} (syncing...)`;
+      saveStatus.className = "tb-status connect-prompt";
+      saveStatus.title = "Syncing tasks to cloud...";
+    } else {
+      saveStatus.textContent = `●  cloud: ${currentUser.username} (synced)`;
+      saveStatus.className = "tb-status linked";
+      saveStatus.title = `Logged in as ${currentUser.username}. Synced across all your devices. Click for options.`;
+    }
+    return;
+  }
+
   if (fileHandle) {
     saveStatus.textContent = `●  linked: ${DB_FILENAME}`;
     saveStatus.className = "tb-status linked";
@@ -242,18 +334,33 @@ function updateSaveStatus() {
     saveStatus.className = "tb-status connect-prompt";
     saveStatus.title = `Found previously linked ${DB_FILENAME}. Click to authorize direct disk saving.`;
   } else if (usingFallback) {
-    saveStatus.textContent = `●  browser storage (click to link ${DB_FILENAME})`;
+    saveStatus.textContent = `●  guest mode (click to login)`;
     saveStatus.className = "tb-status unsaved";
-    saveStatus.title = `Currently using browser storage. Click to link ${DB_FILENAME} on disk.`;
+    saveStatus.title = `Currently in guest mode (browser storage). Type 'login' or 'register' to sync across devices!`;
   } else {
-    saveStatus.textContent = `●  link ${DB_FILENAME}`;
+    saveStatus.textContent = `●  guest (login to sync)`;
     saveStatus.className = "tb-status";
-    saveStatus.title = `Click to link ${DB_FILENAME} on disk.`;
+    saveStatus.title = `Type 'login <user> <pass>' or 'register <user> <pass>' to sync across devices.`;
   }
 }
 
-// Click on titlebar status to authorize or link file
+// Click on titlebar status to authorize, link file, or manage cloud account
 saveStatus.addEventListener("click", async () => {
+  if (currentUser) {
+    printSpacer();
+    printLine(`Cloud Session: <span class="green bold">${escapeHtml(currentUser.username)}</span> (ID: ${escapeHtml(currentUser.id)})`, "dim");
+    printLine(`Status: <span class="green">Synced with Cloud Database</span>`, "dim");
+    if (lastCloudSyncTime) {
+      printLine(`Last synced: ${lastCloudSyncTime.toLocaleTimeString()}`, "dim");
+    }
+    if (cloudSyncError) {
+      printLine(`[warn] Sync warning: ${escapeHtml(cloudSyncError)}`, "amber");
+    }
+    printLine(`Tip: Type <span class="blue" style="display:inline">sync</span> to force-sync, or <span class="blue" style="display:inline">logout</span> to sign out.`, "dim");
+    scrollToBottom();
+    return;
+  }
+
   if (savedFileHandle && !fileHandle) {
     try {
       const perm = await savedFileHandle.requestPermission({ mode: "readwrite" });
@@ -283,7 +390,15 @@ saveStatus.addEventListener("click", async () => {
       console.warn("Re-authorization prompt failed:", e);
     }
   }
-  await cmdLinkFile();
+
+  printSpacer();
+  printLine("DEVICE SYNC & STORAGE OPTIONS:", "bold green");
+  printLine("1. Multi-device Cloud Sync: Type <span class=\"blue\" style=\"display:inline\">register &lt;user&gt; &lt;pass&gt;</span> or <span class=\"blue\" style=\"display:inline\">login &lt;user&gt; &lt;pass&gt;</span>", "dim");
+  if (supportsFileSystemAccess()) {
+    printLine("2. Local Disk File: Type <span class=\"blue\" style=\"display:inline\">link</span> to bind directly to a tasks_data.json on this machine.", "dim");
+  }
+  printLine("3. Offline / Guest: Tasks are saved in this browser's localStorage.", "dim");
+  scrollToBottom();
 });
 
 saveStatus.addEventListener("keydown", async (e) => {
@@ -299,13 +414,40 @@ async function persist() {
   }
   const json = JSON.stringify(state, null, 2);
 
-  // Always keep localStorage updated as secondary backup
+  // 1. Always keep localStorage updated as immediate backup
   try {
+    const key = currentUser ? `${LS_FALLBACK_KEY}_${currentUser.username}` : LS_FALLBACK_KEY;
+    localStorage.setItem(key, json);
     localStorage.setItem(LS_FALLBACK_KEY, json);
   } catch (err) {
     /* ignore storage quota errors */
   }
 
+  // 2. If logged in, sync to Cloud Database (debounced)
+  if (currentUser) {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      if (cloudDebounceTimer) clearTimeout(cloudDebounceTimer);
+      cloudDebounceTimer = setTimeout(async () => {
+        try {
+          cloudSyncing = true;
+          updateSaveStatus();
+          await saveCloudTasks(token, state);
+          cloudSyncing = false;
+          cloudSyncError = null;
+          lastCloudSyncTime = new Date();
+          updateSaveStatus();
+        } catch (err) {
+          cloudSyncing = false;
+          cloudSyncError = err.message;
+          updateSaveStatus();
+          console.warn("Cloud sync warning:", err);
+        }
+      }, 350);
+    }
+  }
+
+  // 3. If local file handle is active
   if (fileHandle) {
     try {
       if (typeof window.notifyDiskSaved === "function") {
@@ -325,7 +467,7 @@ async function persist() {
       usingFallback = true;
       updateSaveStatus();
     }
-  } else {
+  } else if (!currentUser) {
     usingFallback = true;
     updateSaveStatus();
   }
@@ -533,6 +675,149 @@ async function cmdReset(force = false) {
     printLine(`[error] Could not load default ${DB_FILENAME} from server.`, "red");
   } catch (err) {
     printLine(`[error] Reset failed: ${err.message}`, "red");
+  }
+}
+
+// ------------------------------------------------------------
+// Dedicated User Accounts & Multi-Device Sync Commands
+// ------------------------------------------------------------
+
+async function cmdRegister(username, password) {
+  if (!username || !password) {
+    printLine("Usage: <span class=\"blue\" style=\"display:inline\">register &lt;username&gt; &lt;password&gt;</span>", "amber");
+    printLine("Example: register dinesh mySecretPass123", "dim");
+    return;
+  }
+  printLine(`Registering user '${escapeHtml(username)}' with cloud database...`, "dim");
+  try {
+    const data = await registerUser(username, password);
+    localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+    currentUser = data.user;
+    updatePrompt();
+
+    // If user already has local tasks, sync them to the new cloud account
+    if (state.tasks.length > 0) {
+      await saveCloudTasks(data.token, state);
+      printLine(`[✓] ${data.message}`, "green");
+      printLine(`[✓] Synced ${state.tasks.length} existing task(s) to your new cloud account.`, "green");
+    } else {
+      printLine(`[✓] ${data.message}`, "green");
+      printLine(`Your cloud workspace is ready. Tasks you create here will automatically sync across any device you log into!`, "dim");
+    }
+    lastCloudSyncTime = new Date();
+    cloudSyncError = null;
+    updateSaveStatus();
+  } catch (err) {
+    printLine(`[error] Registration failed: ${escapeHtml(err.message)}`, "red");
+  }
+}
+
+async function cmdLogin(username, password) {
+  if (!username || !password) {
+    printLine("Usage: <span class=\"blue\" style=\"display:inline\">login &lt;username&gt; &lt;password&gt;</span>", "amber");
+    printLine("Example: login dinesh mySecretPass123", "dim");
+    return;
+  }
+  printLine(`Authenticating as '${escapeHtml(username)}'...`, "dim");
+  try {
+    const data = await loginUser(username, password);
+    localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+    currentUser = data.user;
+    updatePrompt();
+    printLine(`[✓] ${data.message}`, "green");
+
+    printLine("Fetching your cloud tasks...", "dim");
+    const cloudData = await fetchCloudTasks(data.token);
+    if (cloudData && Array.isArray(cloudData.tasks)) {
+      if (cloudData.isNew && state.tasks.length > 0) {
+        // Upload existing local tasks to fresh cloud account
+        await saveCloudTasks(data.token, state);
+        printLine(`[✓] Synced ${state.tasks.length} task(s) to cloud.`, "green");
+      } else {
+        state = {
+          tasks: cloudData.tasks,
+          categories: Array.isArray(cloudData.categories) ? cloudData.categories : ["general"],
+          meta: cloudData.meta || { version: 2 },
+        };
+        ensureCategories();
+        printLine(`[✓] Loaded ${state.tasks.length} task(s) from cloud.`, "green");
+      }
+    }
+    lastCloudSyncTime = new Date();
+    cloudSyncError = null;
+    updateSaveStatus();
+  } catch (err) {
+    printLine(`[error] Login failed: ${escapeHtml(err.message)}`, "red");
+  }
+}
+
+function cmdLogout() {
+  if (!currentUser) {
+    printLine("You are currently in guest mode (not logged in).", "dim");
+    return;
+  }
+  const prevUser = currentUser.username;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+  currentUser = null;
+  updatePrompt();
+  updateSaveStatus();
+  printLine(`[✓] Logged out from ${prevUser}. Switched back to guest mode.`, "green");
+}
+
+async function cmdWhoami() {
+  if (currentUser) {
+    printLine(`User: <span class="green bold">${escapeHtml(currentUser.username)}</span> (ID: ${escapeHtml(currentUser.id)})`, "dim");
+    printLine(`Status: <span class="green">Authenticated & Cloud Synced</span>`, "dim");
+    printLine(`Storage: Cloud Database (Upstash Redis / Vercel KV)`, "dim");
+    if (lastCloudSyncTime) {
+      printLine(`Last synced: ${lastCloudSyncTime.toLocaleTimeString()}`, "dim");
+    }
+    if (cloudSyncError) {
+      printLine(`Sync warning: ${escapeHtml(cloudSyncError)}`, "amber");
+    }
+  } else {
+    printLine(`User: <span class="amber bold">guest</span> (unauthenticated)`, "dim");
+    printLine(`Storage: Local Browser Storage (${fileHandle ? "Disk Linked" : "Isolated to this device"})`, "dim");
+    printLine(`Tip: To access your tasks from other devices too, type <span class="blue" style="display:inline">register &lt;user&gt; &lt;pass&gt;</span> or <span class="blue" style="display:inline">login &lt;user&gt; &lt;pass&gt;</span>.`, "dim");
+  }
+}
+
+async function cmdSync() {
+  if (!currentUser) {
+    printLine("[!] You must be logged in to sync with the cloud. Type 'login <username> <password>'.", "amber");
+    return;
+  }
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) {
+    printLine("[error] Missing auth session. Please log in again.", "red");
+    return;
+  }
+  printLine("Syncing with cloud database...", "dim");
+  try {
+    cloudSyncing = true;
+    updateSaveStatus();
+    // First push local state
+    await saveCloudTasks(token, state);
+    // Then pull remote state
+    const remote = await fetchCloudTasks(token);
+    if (remote && Array.isArray(remote.tasks)) {
+      state.tasks = remote.tasks;
+      state.categories = Array.isArray(remote.categories) ? remote.categories : state.categories;
+      ensureCategories();
+    }
+    cloudSyncing = false;
+    cloudSyncError = null;
+    lastCloudSyncTime = new Date();
+    updateSaveStatus();
+    printLine(`[✓] Cloud sync complete (${state.tasks.length} tasks). All devices up to date!`, "green");
+  } catch (err) {
+    cloudSyncing = false;
+    cloudSyncError = err.message;
+    updateSaveStatus();
+    printLine(`[error] Sync failed: ${escapeHtml(err.message)}`, "red");
   }
 }
 
@@ -913,6 +1198,16 @@ function cmdHelp() {
       ]
     },
     {
+      title: "USER ACCOUNTS & MULTI-DEVICE SYNC",
+      rows: [
+        ["register &lt;user&gt; &lt;pass&gt;", "Create a new cloud user account"],
+        ["login &lt;user&gt; &lt;pass&gt;", "Log in and sync tasks from any device"],
+        ["logout", "Sign out and return to guest mode"],
+        ["whoami", "Display current user session and cloud status"],
+        ["sync", "Force immediate push/pull with cloud database"],
+      ]
+    },
+    {
       title: "DATA & PERSISTENCE",
       rows: [
         ["link (or link_file)", "Link tasks_data.json on disk to save directly"],
@@ -944,10 +1239,11 @@ function cmdHelp() {
 // ------------------------------------------------------------
 
 function cmdPwd() {
+  const user = currentUser ? currentUser.username : "guest";
   if (currentDir === "~" || !currentDir) {
-    printLine("/home/guest/tasks");
+    printLine(`/home/${user}/tasks`);
   } else {
-    printLine(`/home/guest/tasks/${currentDir}`);
+    printLine(`/home/${user}/tasks/${currentDir}`);
   }
 }
 
@@ -995,7 +1291,8 @@ function cmdCd(target) {
     currentDir = previousDir || "~";
     previousDir = temp;
     updatePrompt();
-    printLine(currentDir === "~" ? "/home/guest/tasks" : `/home/guest/tasks/${currentDir}`);
+    const user = currentUser ? currentUser.username : "guest";
+    printLine(currentDir === "~" ? `/home/${user}/tasks` : `/home/${user}/tasks/${currentDir}`);
     return;
   }
 
@@ -1968,6 +2265,31 @@ function cmdMan(cmdName) {
       synopsis: "reset [--confirm|-f]\nreload [--confirm|-f]",
       desc: "Reset your local tasks workspace back to the server's default tasks_data.json template. Requires --confirm flag.",
       examples: "reset --confirm\nreload -f"
+    },
+    register: {
+      synopsis: "register <username> <password>\nsignup <username> <password>",
+      desc: "Create a new user account with cloud database synchronization so you can access tasks across all your devices.",
+      examples: "register dinesh myPass123\nsignup alex secret456"
+    },
+    login: {
+      synopsis: "login <username> <password>\nsignin <username> <password>",
+      desc: "Authenticate with your cloud account and automatically pull all your synced tasks onto this device.",
+      examples: "login dinesh myPass123\nsignin alex secret456"
+    },
+    logout: {
+      synopsis: "logout",
+      desc: "Sign out from your cloud user session and return to guest mode.",
+      examples: "logout"
+    },
+    whoami: {
+      synopsis: "whoami",
+      desc: "Print current active user, session status, and cloud synchronization state.",
+      examples: "whoami"
+    },
+    sync: {
+      synopsis: "sync",
+      desc: "Trigger an immediate manual push and pull synchronization with the cloud database.",
+      examples: "sync"
     }
   };
 
@@ -2489,6 +2811,25 @@ async function handleCommand(raw) {
       cmdStats();
       break;
 
+    // User Accounts & Multi-Device Sync
+    case "register":
+    case "signup":
+      await cmdRegister(args[0], args[1]);
+      break;
+    case "login":
+    case "signin":
+      await cmdLogin(args[0], args[1]);
+      break;
+    case "logout":
+    case "signout":
+      cmdLogout();
+      break;
+    case "sync":
+    case "pull":
+    case "push":
+      await cmdSync();
+      break;
+
     // Persistence & Linking
     case "link":
     case "link_file":
@@ -2606,12 +2947,13 @@ hiddenInput.addEventListener("keydown", async e => {
 function autocomplete() {
   const commandsWithArgs = [
     "touch", "cat", "rm", "mkdir", "rmdir", "cd", "cp", "mv",
-    "grep", "man", "progress", "status", "due", "note", "whereis", "id", "tasks"
+    "grep", "man", "progress", "status", "due", "note", "whereis", "id", "tasks",
+    "register", "signup", "login", "signin"
   ];
   const commandsWithoutArgs = [
     "ls", "pwd", "whoami", "uname", "ps", "top", "df", "cal", "date",
     "wc", "clear", "cls", "stats", "dashboard", "export", "download",
-    "import", "upload", "reset", "reload",
+    "import", "upload", "reset", "reload", "logout", "signout", "sync", "pull", "push",
     "link", "help", "?", "tree", "flowchart"
   ];
 
@@ -2758,29 +3100,70 @@ async function runBootSequence() {
     await sleep(line.delay);
   }
 
-  // 1. Try to auto-reconnect previously linked file handle from IndexedDB
-  const autoConnected = await tryAutoConnectFile();
+  // 1. Check for active cloud user session
+  const storedToken = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (storedToken) {
+    try {
+      printLine("Checking cloud session credentials...", "boot-line");
+      const user = await verifyCurrentUser(storedToken);
+      if (user) {
+        currentUser = user;
+        updatePrompt();
+        printLine(`Authenticated as ${currentUser.username}@tasks [ OK ]`, "boot-line");
 
-  if (autoConnected) {
-    printLine(`Mounted ${DB_FILENAME} [ OK ]`, "boot-line");
-    printLine(`Loaded ${state.tasks.length} task(s) in ${state.categories.length} category folder(s).`, "boot-line");
-  } else {
-    // 2. Check browser storage first (preserves user tasks across reloads on Vercel/web)
-    const restored = await loadFromFallback();
-    if (restored && state.tasks.length > 0) {
-      printLine(`Restored ${state.tasks.length} task(s) from browser storage [ OK ]`, "boot-line");
-    } else {
-      // 3. First-time visit: seed from tasks_data.json via HTTP fetch
-      const httpLoaded = await loadFromHttpFile();
-      if (httpLoaded && state.tasks.length > 0) {
         try {
-          localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(state, null, 2));
-        } catch (e) {}
-        usingFallback = true;
-        printLine(`Pre-loaded ${state.tasks.length} task(s) from ${DB_FILENAME} [ OK ]`, "boot-line");
+          const cloudData = await fetchCloudTasks(storedToken);
+          if (cloudData && Array.isArray(cloudData.tasks)) {
+            state = {
+              tasks: cloudData.tasks,
+              categories: Array.isArray(cloudData.categories) ? cloudData.categories : ["general"],
+              meta: cloudData.meta || { version: 2 },
+            };
+            ensureCategories();
+            lastCloudSyncTime = new Date();
+            printLine(`Synchronized ${state.tasks.length} task(s) from cloud database [ OK ]`, "boot-line");
+          }
+        } catch (fetchErr) {
+          cloudSyncError = fetchErr.message;
+          printLine(`[warn] Could not reach cloud database (${fetchErr.message}). Using offline backup.`, "boot-line");
+          await loadFromFallback();
+        }
       } else {
-        usingFallback = true;
-        printLine(`Ready with fresh task workspace.`, "boot-line");
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        localStorage.removeItem(AUTH_USER_KEY);
+        currentUser = null;
+      }
+    } catch (err) {
+      console.warn("Boot auth verification failed:", err);
+    }
+  }
+
+  // 2. If not authenticated, proceed with guest persistence
+  if (!currentUser) {
+    // Try to auto-reconnect previously linked file handle from IndexedDB
+    const autoConnected = await tryAutoConnectFile();
+
+    if (autoConnected) {
+      printLine(`Mounted ${DB_FILENAME} [ OK ]`, "boot-line");
+      printLine(`Loaded ${state.tasks.length} task(s) in ${state.categories.length} category folder(s).`, "boot-line");
+    } else {
+      // Check browser storage first (preserves user tasks across reloads on Vercel/web)
+      const restored = await loadFromFallback();
+      if (restored && state.tasks.length > 0) {
+        printLine(`Restored ${state.tasks.length} task(s) from browser storage [ OK ]`, "boot-line");
+      } else {
+        // First-time visit: seed from tasks_data.json via HTTP fetch
+        const httpLoaded = await loadFromHttpFile();
+        if (httpLoaded && state.tasks.length > 0) {
+          try {
+            localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(state, null, 2));
+          } catch (e) {}
+          usingFallback = true;
+          printLine(`Pre-loaded ${state.tasks.length} task(s) from ${DB_FILENAME} [ OK ]`, "boot-line");
+        } else {
+          usingFallback = true;
+          printLine(`Ready with fresh task workspace.`, "boot-line");
+        }
       }
     }
   }
@@ -2798,14 +3181,14 @@ async function runBootSequence() {
   await typeLine("Type 'help' or 'man' to see commands, or 'ls' to list your tasks.", "dim", 8);
   await sleep(70);
 
-  if (fileHandle) {
+  if (currentUser) {
+    printLine(`[✓] Cloud Synced: Logged in as ${currentUser.username}. Tasks auto-sync across all your devices.`, "green");
+  } else if (fileHandle) {
     printLine(`[✓] Disk linked: Changes save directly to ${DB_FILENAME} on disk.`, "green");
   } else if (savedFileHandle) {
     printLine(`Tip: Click [● click to connect ${DB_FILENAME}] in the title bar or type 'link' to authorize disk saving.`, "amber");
-  } else if (supportsFileSystemAccess()) {
-    printLine(`Tip: Click [● link ${DB_FILENAME}] in the title bar or type 'link' to save directly to disk.`, "dim");
   } else {
-    printLine(`[!] Direct file linking is not supported by this browser. Use 'export' to download ${DB_FILENAME}.`, "amber");
+    printLine(`Tip: Type <span class="blue" style="display:inline">register &lt;user&gt; &lt;pass&gt;</span> or <span class="blue" style="display:inline">login &lt;user&gt; &lt;pass&gt;</span> to sync tasks to your phone & other devices!`, "amber");
   }
 
   printSpacer();

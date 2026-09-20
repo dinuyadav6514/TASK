@@ -1,0 +1,18 @@
+{
+  "name": "task-terminal",
+  "version": "2.1.0",
+  "description": "Unix-style terminal task manager with multi-device cloud synchronization",
+  "private": true,
+  "scripts": {
+    "test": "node test/api-test.js"
+  },
+  "keywords": [
+    "terminal",
+    "tasks",
+    "todo",
+    "cli",
+    "vercel"
+  ],
+  "author": "Dinesh Yadav",
+  "license": "MIT"
+}
