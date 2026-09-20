@@ -1,0 +1,116 @@
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "name": "LV cable Sizing",
+      "category": "company",
+      "status": "done",
+      "createdAt": "2026-09-07T16:52:37.694Z",
+      "dueDate": null,
+      "notes": "",
+      "progress": 100,
+      "history": [
+        {
+          "date": "2026-09-07T16:52:37.694Z",
+          "action": "created",
+          "note": "Task created in [company/]"
+        },
+        {
+          "date": "2026-09-09T16:29:00.724Z",
+          "action": "id_change",
+          "note": "ID changed from [tmtrhb4xq8gl6t] to [t1]"
+        },
+        {
+          "date": "2026-09-09T16:29:23.931Z",
+          "action": "progress",
+          "note": "Progress set to 50%"
+        },
+        {
+          "date": "2026-09-20T16:45:34.038Z",
+          "action": "progress",
+          "note": "Progress set to 100%"
+        },
+        {
+          "date": "2026-09-20T16:45:42.531Z",
+          "action": "status_change",
+          "note": "Status set to done"
+        }
+      ]
+    },
+    {
+      "id": "m1",
+      "name": "precalculas",
+      "category": "GATE/MATH",
+      "status": "done",
+      "createdAt": "2026-09-09T17:16:02.817Z",
+      "dueDate": null,
+      "notes": "",
+      "progress": 100,
+      "history": [
+        {
+          "date": "2026-09-09T17:16:02.817Z",
+          "action": "created",
+          "note": "Task created in [GATE/MATH/] with id [#m1]"
+        },
+        {
+          "date": "2026-09-20T16:38:53.590Z",
+          "action": "progress",
+          "note": "Progress set to 100%"
+        },
+        {
+          "date": "2026-09-20T16:41:54.943Z",
+          "action": "status_change",
+          "note": "Status set to done"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "name": "calculas2",
+      "category": "GATE/MATH",
+      "status": "progress",
+      "createdAt": "2026-09-20T16:44:39.987Z",
+      "dueDate": null,
+      "notes": "",
+      "progress": 0,
+      "history": [
+        {
+          "date": "2026-09-20T16:44:39.987Z",
+          "action": "created",
+          "note": "Task created in [GATE/MATH/] with id [#m2]"
+        },
+        {
+          "date": "2026-09-20T16:44:51.839Z",
+          "action": "status_change",
+          "note": "Status set to progress"
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "name": "busbar protection systems",
+      "category": "company",
+      "status": "pending",
+      "createdAt": "2026-09-20T16:46:26.260Z",
+      "dueDate": null,
+      "notes": "",
+      "progress": 0,
+      "history": [
+        {
+          "date": "2026-09-20T16:46:26.260Z",
+          "action": "created",
+          "note": "Task created in [company/] with id [#c2]"
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "version": 1
+  },
+  "categories": [
+    "general",
+    "company",
+    "GATE",
+    "GATE/MATH"
+  ]
+}
