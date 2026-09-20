@@ -6,9 +6,39 @@ const DB_FILENAME = "tasks_data.json";
 const LS_FALLBACK_KEY = "task-terminal-fallback-v1";
 const AUTH_TOKEN_KEY = "task-terminal-auth-token-v1";
 const AUTH_USER_KEY = "task-terminal-auth-user-v1";
+const THEME_STORAGE_KEY = "task-terminal-theme";
 const IDB_NAME = "TaskTerminalDB";
 const IDB_STORE = "file_handles";
 const IDB_KEY = "tasks_data_handle";
+
+function getActiveTheme() {
+  return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+}
+
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  if (isLight) {
+    document.documentElement.setAttribute("data-theme", "light");
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, isLight ? "light" : "dark");
+  } catch (e) {}
+
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) {
+    metaTheme.setAttribute("content", isLight ? "#f8faf9" : "#0c0e0c");
+  }
+}
+
+// Initialize theme immediately on script load
+try {
+  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || localStorage.getItem("browser-dashboard-theme");
+  if (savedTheme === "light") {
+    applyTheme("light");
+  }
+} catch (e) {}
 
 let currentUser = null; // { id, username } if authenticated
 let cloudSyncing = false;
@@ -1138,11 +1168,13 @@ function buildProgressTrendCanvas(task) {
   const plotW = cssWidth - padL - padR;
   const plotH = cssHeight - padT - padB;
 
+  const isLight = getActiveTheme() === "light";
+
   // Grid lines
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.strokeStyle = isLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.06)";
   ctx.lineWidth = 1;
   ctx.font = "9.5px 'SF Mono', monospace";
-  ctx.fillStyle = "#6b8f74";
+  ctx.fillStyle = isLight ? "#4b5563" : "#6b8f74";
   [0, 25, 50, 75, 100].forEach(v => {
     const y = padT + plotH - (v / 100) * plotH;
     ctx.beginPath();
@@ -1157,6 +1189,8 @@ function buildProgressTrendCanvas(task) {
     const xFor = i => padL + (n === 1 ? plotW : (i / (n - 1)) * plotW);
     const yFor = v => padT + plotH - (v / 100) * plotH;
 
+    const greenMain = isLight ? "#15803d" : "#4ade80";
+
     // Area fill
     ctx.beginPath();
     ctx.moveTo(xFor(0), yFor(points[0].value));
@@ -1165,8 +1199,8 @@ function buildProgressTrendCanvas(task) {
     ctx.lineTo(xFor(0), padT + plotH);
     ctx.closePath();
     const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
-    grad.addColorStop(0, "rgba(74,222,128,0.35)");
-    grad.addColorStop(1, "rgba(74,222,128,0.02)");
+    grad.addColorStop(0, isLight ? "rgba(21,128,61,0.22)" : "rgba(74,222,128,0.35)");
+    grad.addColorStop(1, isLight ? "rgba(21,128,61,0.01)" : "rgba(74,222,128,0.02)");
     ctx.fillStyle = grad;
     ctx.fill();
 
@@ -1176,10 +1210,12 @@ function buildProgressTrendCanvas(task) {
       const x = xFor(i), y = yFor(p.value);
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = "#4ade80";
+    ctx.strokeStyle = greenMain;
     ctx.lineWidth = 2;
-    ctx.shadowColor = "rgba(74,222,128,0.6)";
-    ctx.shadowBlur = 6;
+    if (!isLight) {
+      ctx.shadowColor = "rgba(74,222,128,0.6)";
+      ctx.shadowBlur = 6;
+    }
     ctx.stroke();
     ctx.shadowBlur = 0;
 
@@ -1188,7 +1224,7 @@ function buildProgressTrendCanvas(task) {
       const x = xFor(i), y = yFor(p.value);
       ctx.beginPath();
       ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = "#4ade80";
+      ctx.fillStyle = greenMain;
       ctx.fill();
     });
   }
@@ -1274,7 +1310,10 @@ function buildStatusBarCanvas() {
   const ctx = canvas.getContext("2d");
   ctx.scale(dpr, dpr);
 
-  const colors = { pending: "#f5c451", progress: "#62b8f5", done: "#4ade80", overdue: "#f56565" };
+  const isLight = getActiveTheme() === "light";
+  const colors = isLight
+    ? { pending: "#b45309", progress: "#0284c7", done: "#15803d", overdue: "#dc2626" }
+    : { pending: "#f5c451", progress: "#62b8f5", done: "#4ade80", overdue: "#f56565" };
   const labels = { pending: "Pending", progress: "Active", done: "Done", overdue: "Overdue" };
   const keys = Object.keys(counts);
   const maxVal = Math.max(1, ...Object.values(counts));
@@ -1302,11 +1341,11 @@ function buildStatusBarCanvas() {
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    ctx.fillStyle = "#d7ffe0";
+    ctx.fillStyle = isLight ? "#111827" : "#d7ffe0";
     ctx.textAlign = "center";
     ctx.fillText(String(val), x + barW / 2, y - 4);
 
-    ctx.fillStyle = "#6b8f74";
+    ctx.fillStyle = isLight ? "#4b5563" : "#6b8f74";
     ctx.fillText(labels[key], x + barW / 2, cssHeight - 6);
   });
 
@@ -1367,6 +1406,7 @@ function cmdHelp() {
         ["wc [-l]", "Print task, folder, and word counts"],
         ["whereis &lt;cmd&gt;", "Locate binary executable path"],
         ["sort", "Sort tasks by name, progress, or due date"],
+        ["theme [light|dark]", "Switch terminal between light and dark themes (or toggle)"],
         ["clear (or cls)", "Clear terminal output"],
         ["man &lt;cmd&gt;", "Display manual page for any command"],
       ]
@@ -2307,10 +2347,6 @@ function cmdWc() {
   printLine(`  ${total} tasks   ${state.categories.length} folders   ${words} words   (${done} completed)`);
 }
 
-function cmdWhoami() {
-  printLine("guest");
-}
-
 function cmdUname(args = []) {
   if (args.includes("-a") || args.length === 0) {
     printLine("Linux task-terminal 6.8.0-generic x86_64 WebKernel/1.0 GNU/Linux");
@@ -2482,6 +2518,11 @@ function cmdMan(cmdName) {
       synopsis: "delete_account <password> --confirm\nrmuser <password> --confirm",
       desc: "Permanently delete your cloud user profile and all cloud-stored tasks. Requires --confirm flag.",
       examples: "delete_account myPassword123 --confirm"
+    },
+    theme: {
+      synopsis: "theme [light|dark|toggle]\ncolortheme [light|dark|toggle]\nmode [light|dark|toggle]",
+      desc: "Switch the terminal color scheme between dark retro CRT mode and clean modern light mode. Omitting arguments toggles between the two modes.",
+      examples: "theme\ntheme light\ntheme dark\ntheme toggle"
     }
   };
 
@@ -2770,6 +2811,28 @@ async function cmdNewFile() {
 
 function cmdClear() {
   output.innerHTML = "";
+}
+
+function cmdTheme(themeArg) {
+  const raw = (themeArg || "").trim().toLowerCase();
+  const current = getActiveTheme();
+
+  let target = "";
+  if (raw === "light" || raw === "white" || raw === "day") {
+    target = "light";
+  } else if (raw === "dark" || raw === "black" || raw === "night") {
+    target = "dark";
+  } else if (raw === "toggle" || !raw) {
+    target = current === "light" ? "dark" : "light";
+  } else {
+    printLine(`[!] Unknown theme '${escapeHtml(raw)}'. Options: <span class="blue">theme light</span>, <span class="blue">theme dark</span>, or <span class="blue">theme toggle</span>.`, "amber");
+    return;
+  }
+
+  applyTheme(target);
+  printSpacer();
+  printLine(`[✓] Terminal theme set to <span class="green bold">${target.toUpperCase()}</span> mode.`, "green");
+  printLine(`Tip: You can switch back anytime using <span class="blue" style="display:inline">theme ${target === "light" ? "dark" : "light"}</span>.`, "dim");
 }
 
 // ------------------------------------------------------------
@@ -3064,6 +3127,11 @@ async function handleCommand(raw) {
     case "cls":
       cmdClear();
       break;
+    case "theme":
+    case "colortheme":
+    case "mode":
+      cmdTheme(args[0]);
+      break;
 
     default:
       printLine(`bash: ${escapeHtml(cmd)}: command not found. Type <span class="blue" style="display:inline">help</span> or <span class="blue" style="display:inline">man</span> for available commands.`, "red");
@@ -3156,7 +3224,8 @@ function autocomplete() {
     "touch", "cat", "rm", "mkdir", "rmdir", "cd", "cp", "mv",
     "grep", "man", "progress", "status", "due", "note", "whereis", "id", "tasks",
     "register", "signup", "login", "signin",
-    "passwd", "change_password", "change_username", "rename_user", "delete_account", "rmuser"
+    "passwd", "change_password", "change_username", "rename_user", "delete_account", "rmuser",
+    "theme"
   ];
   const commandsWithoutArgs = [
     "ls", "pwd", "whoami", "uname", "ps", "top", "df", "cal", "date",
@@ -3238,6 +3307,22 @@ function autocomplete() {
         const picked = matches[tabMatchIndex];
         const formatted = picked.includes(" ") ? `"${picked}"` : picked;
         hiddenInput.value = `${cmdPart} ${formatted}`;
+        typedText.textContent = hiddenInput.value;
+        return;
+      }
+    }
+
+    if (cmdPart === "theme" || cmdPart === "colortheme" || cmdPart === "mode") {
+      const themeOptions = ["light", "dark", "toggle"];
+      const matches = themeOptions.filter(o => o.startsWith(argPart));
+      if (matches.length > 0) {
+        if (!lastTabPrefix || lastTabPrefix !== argPart) {
+          lastTabPrefix = argPart;
+          tabMatchIndex = 0;
+        } else {
+          tabMatchIndex = (tabMatchIndex + 1) % matches.length;
+        }
+        hiddenInput.value = `${cmdPart} ${matches[tabMatchIndex]}`;
         typedText.textContent = hiddenInput.value;
         return;
       }

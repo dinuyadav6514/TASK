@@ -107,6 +107,7 @@ To enable multi-device sync across all your devices:
 | `export` / `download` | | Export workspace as `tasks_data.json` |
 | `import` / `upload` | | Import and restore tasks from a JSON backup file |
 | `reset` / `reload` | `[--confirm]` | Reset tasks to default server template |
+| `theme` / `mode` | `[light\|dark]` | Switch terminal between light and dark themes (or toggle) |
 | `link` | | Link `tasks_data.json` on disk (File System Access API) |
 | `clear` / `cls` | | Clear terminal screen |
 
