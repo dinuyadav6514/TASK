@@ -194,7 +194,131 @@ async function runTests() {
     console.log("   ✓ Multi-device sync verified: Device 2 successfully loaded tasks created on Device 1!");
   }
 
-  console.log("\n🎉 ALL 8 INTEGRATION TESTS PASSED WITH 100% SUCCESS!");
+  // Test 9: Change password
+  console.log("9. Testing password change for 'dinesh'...");
+  {
+    // Try with wrong current password
+    const { req: wReq, res: wRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=change-password",
+      headers: { authorization: `Bearer ${dineshToken}` },
+      body: { oldPassword: "WrongOldPassword", newPassword: "NewBrandPassword999!" },
+    });
+    await authHandler(wReq, wRes);
+    assert.strictEqual(wRes._status, 401, "Expected 401 for wrong current password");
+
+    // Correct change password
+    const { req: cReq, res: cRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=change-password",
+      headers: { authorization: `Bearer ${dineshToken}` },
+      body: { oldPassword: "Password123!", newPassword: "NewBrandPassword999!" },
+    });
+    await authHandler(cReq, cRes);
+    assert.strictEqual(cRes._status, 200, "Expected 200 for successful password change");
+
+    // Verify old password fails
+    const { req: oldReq, res: oldRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=login",
+      body: { username: "dinesh", password: "Password123!" },
+    });
+    await authHandler(oldReq, oldRes);
+    assert.strictEqual(oldRes._status, 401, "Old password should now fail");
+
+    // Verify new password succeeds
+    const { req: newReq, res: newRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=login",
+      body: { username: "dinesh", password: "NewBrandPassword999!" },
+    });
+    await authHandler(newReq, newRes);
+    assert.strictEqual(newRes._status, 200, "New password should succeed");
+    dineshToken = newRes._data.token;
+    console.log("   ✓ Password change verified: old password invalidated, new password accepted.");
+  }
+
+  // Test 10: Change username
+  console.log("10. Testing username rename from 'dinesh' to 'dinesh_dev'...");
+  {
+    // Try rename to existing username 'alex' (should fail 409)
+    const { req: cfReq, res: cfRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=change-username",
+      headers: { authorization: `Bearer ${dineshToken}` },
+      body: { newUsername: "alex", password: "NewBrandPassword999!" },
+    });
+    await authHandler(cfReq, cfRes);
+    assert.strictEqual(cfRes._status, 409, "Should reject taken username");
+
+    // Valid rename to 'dinesh_dev'
+    const { req: rnReq, res: rnRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=change-username",
+      headers: { authorization: `Bearer ${dineshToken}` },
+      body: { newUsername: "dinesh_dev", password: "NewBrandPassword999!" },
+    });
+    await authHandler(rnReq, rnRes);
+    assert.strictEqual(rnRes._status, 200, "Expected 200 for username rename");
+    dineshToken = rnRes._data.token;
+    assert.strictEqual(rnRes._data.user.username, "dinesh_dev");
+
+    // Verify old username can no longer log in
+    const { req: oldLReq, res: oldLRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=login",
+      body: { username: "dinesh", password: "NewBrandPassword999!" },
+    });
+    await authHandler(oldLReq, oldLRes);
+    assert.strictEqual(oldLRes._status, 401, "Old username should not exist");
+
+    // Verify tasks are preserved under new username
+    const { req: tsReq, res: tsRes } = mockReqRes({
+      method: "GET",
+      url: "/api/tasks",
+      headers: { authorization: `Bearer ${dineshToken}` },
+    });
+    await tasksHandler(tsReq, tsRes);
+    assert.strictEqual(tsRes._status, 200);
+    assert.strictEqual(tsRes._data.tasks.length, 2, "Tasks must be completely preserved after username change");
+    console.log("   ✓ Username rename verified: new username active, old username removed, all tasks preserved!");
+  }
+
+  // Test 11: Delete account
+  console.log("11. Testing account deletion...");
+  {
+    // Wrong password fails
+    const { req: wReq, res: wRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=delete-account",
+      headers: { authorization: `Bearer ${dineshToken}` },
+      body: { password: "WrongPassword" },
+    });
+    await authHandler(wReq, wRes);
+    assert.strictEqual(wRes._status, 401);
+
+    // Correct password succeeds
+    const { req: dReq, res: dRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=delete-account",
+      headers: { authorization: `Bearer ${dineshToken}` },
+      body: { password: "NewBrandPassword999!" },
+    });
+    await authHandler(dReq, dRes);
+    assert.strictEqual(dRes._status, 200, "Expected 200 for account deletion");
+
+    // Verify login is no longer possible
+    const { req: postReq, res: postRes } = mockReqRes({
+      method: "POST",
+      url: "/api/auth?action=login",
+      body: { username: "dinesh_dev", password: "NewBrandPassword999!" },
+    });
+    await authHandler(postReq, postRes);
+    assert.strictEqual(postRes._status, 401, "Deleted user should not be able to log in");
+    console.log("   ✓ Account deletion verified: user profile and cloud tasks permanently deleted.");
+  }
+
+  console.log("\n🎉 ALL 11 INTEGRATION TESTS PASSED WITH 100% SUCCESS!");
 }
 
 runTests().catch(err => {

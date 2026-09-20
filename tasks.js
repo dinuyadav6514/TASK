@@ -303,6 +303,48 @@ async function saveCloudTasks(token, tasksState) {
   return data;
 }
 
+async function changeUserPassword(token, oldPassword, newPassword) {
+  const res = await fetch("/api/auth?action=change-password", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ oldPassword, newPassword }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.details || "Password change failed");
+  return data;
+}
+
+async function changeUserName(token, newUsername, password) {
+  const res = await fetch("/api/auth?action=change-username", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ newUsername, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.details || "Username change failed");
+  return data;
+}
+
+async function deleteUserAccount(token, password) {
+  const res = await fetch("/api/auth?action=delete-account", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || data.details || "Account deletion failed");
+  return data;
+}
+
 function supportsFileSystemAccess() {
   return "showSaveFilePicker" in window && "showOpenFilePicker" in window;
 }
@@ -821,6 +863,93 @@ async function cmdSync() {
   }
 }
 
+async function cmdPasswd(oldPassword, newPassword) {
+  if (!currentUser) {
+    printLine("[!] You must be logged in to change your password. Type 'login <user> <pass>'.", "amber");
+    return;
+  }
+  if (!oldPassword || !newPassword) {
+    printLine("Usage: <span class=\"blue\" style=\"display:inline\">passwd &lt;current_password&gt; &lt;new_password&gt;</span>", "amber");
+    printLine("Example: passwd oldPass123 newSecret456", "dim");
+    return;
+  }
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) {
+    printLine("[error] Active session token not found. Please log in again.", "red");
+    return;
+  }
+  printLine("Updating password in cloud database...", "dim");
+  try {
+    const data = await changeUserPassword(token, oldPassword, newPassword);
+    printLine(`[✓] ${data.message}`, "green");
+  } catch (err) {
+    printLine(`[error] Password change failed: ${escapeHtml(err.message)}`, "red");
+  }
+}
+
+async function cmdChangeUsername(newUsername, password) {
+  if (!currentUser) {
+    printLine("[!] You must be logged in to change your username. Type 'login <user> <pass>'.", "amber");
+    return;
+  }
+  if (!newUsername || !password) {
+    printLine("Usage: <span class=\"blue\" style=\"display:inline\">change_username &lt;new_username&gt; &lt;password&gt;</span>", "amber");
+    printLine("Example: change_username new_dinesh myPassword123", "dim");
+    return;
+  }
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) {
+    printLine("[error] Active session token not found. Please log in again.", "red");
+    return;
+  }
+  printLine(`Changing username to '${escapeHtml(newUsername)}'...`, "dim");
+  try {
+    const data = await changeUserName(token, newUsername, password);
+    localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+    currentUser = data.user;
+    updatePrompt();
+    updateSaveStatus();
+    printLine(`[✓] ${data.message}`, "green");
+  } catch (err) {
+    printLine(`[error] Username change failed: ${escapeHtml(err.message)}`, "red");
+  }
+}
+
+async function cmdDeleteAccount(password, confirmFlag) {
+  if (!currentUser) {
+    printLine("[!] You must be logged in to delete an account.", "amber");
+    return;
+  }
+  if (!password || confirmFlag !== "--confirm") {
+    printSpacer();
+    printLine("⚠️  CAUTION: PERMANENT ACCOUNT DELETION", "bold red");
+    printLine(`This will permanently delete your cloud account '<span class="amber bold">${escapeHtml(currentUser.username)}</span>' and ALL associated cloud tasks!`, "amber");
+    printLine("This action cannot be undone.", "dim");
+    printSpacer();
+    printLine("To proceed with deletion, type: <span class=\"red\" style=\"display:inline\">delete_account &lt;your_password&gt; --confirm</span>", "red");
+    return;
+  }
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (!token) {
+    printLine("[error] Missing session token. Please log in again.", "red");
+    return;
+  }
+  printLine("Deleting account and cloud tasks from database...", "dim");
+  try {
+    const data = await deleteUserAccount(token, password);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    currentUser = null;
+    updatePrompt();
+    updateSaveStatus();
+    printLine(`[✓] ${data.message}`, "green");
+    printLine("Switched back to guest mode.", "dim");
+  } catch (err) {
+    printLine(`[error] Account deletion failed: ${escapeHtml(err.message)}`, "red");
+  }
+}
+
 // ------------------------------------------------------------
 // Task data model
 // ------------------------------------------------------------
@@ -1204,6 +1333,9 @@ function cmdHelp() {
         ["login &lt;user&gt; &lt;pass&gt;", "Log in and sync tasks from any device"],
         ["logout", "Sign out and return to guest mode"],
         ["whoami", "Display current user session and cloud status"],
+        ["passwd &lt;old&gt; &lt;new&gt;", "Change your cloud account password"],
+        ["change_username &lt;new&gt; &lt;pass&gt;", "Update your cloud username"],
+        ["delete_account &lt;pass&gt; --confirm", "Permanently delete account and cloud tasks"],
         ["sync", "Force immediate push/pull with cloud database"],
       ]
     },
@@ -2290,6 +2422,21 @@ function cmdMan(cmdName) {
       synopsis: "sync",
       desc: "Trigger an immediate manual push and pull synchronization with the cloud database.",
       examples: "sync"
+    },
+    passwd: {
+      synopsis: "passwd <current_password> <new_password>\nchange_password <current_password> <new_password>",
+      desc: "Update your cloud account password across all your connected devices.",
+      examples: "passwd myOldPass123 myNewSecret456"
+    },
+    change_username: {
+      synopsis: "change_username <new_username> <current_password>\nrename_user <new_username> <current_password>",
+      desc: "Change your cloud account username. All existing tasks and categories remain preserved.",
+      examples: "change_username new_dinesh myPassword123"
+    },
+    delete_account: {
+      synopsis: "delete_account <password> --confirm\nrmuser <password> --confirm",
+      desc: "Permanently delete your cloud user profile and all cloud-stored tasks. Requires --confirm flag.",
+      examples: "delete_account myPassword123 --confirm"
     }
   };
 
@@ -2824,6 +2971,21 @@ async function handleCommand(raw) {
     case "signout":
       cmdLogout();
       break;
+    case "passwd":
+    case "change_password":
+    case "password":
+      await cmdPasswd(args[0], args[1]);
+      break;
+    case "change_username":
+    case "rename_user":
+    case "chname":
+      await cmdChangeUsername(args[0], args[1]);
+      break;
+    case "delete_account":
+    case "rmuser":
+    case "delete_user":
+      await cmdDeleteAccount(args[0], args[1]);
+      break;
     case "sync":
     case "pull":
     case "push":
@@ -2948,7 +3110,8 @@ function autocomplete() {
   const commandsWithArgs = [
     "touch", "cat", "rm", "mkdir", "rmdir", "cd", "cp", "mv",
     "grep", "man", "progress", "status", "due", "note", "whereis", "id", "tasks",
-    "register", "signup", "login", "signin"
+    "register", "signup", "login", "signin",
+    "passwd", "change_password", "change_username", "rename_user", "delete_account", "rmuser"
   ];
   const commandsWithoutArgs = [
     "ls", "pwd", "whoami", "uname", "ps", "top", "df", "cal", "date",

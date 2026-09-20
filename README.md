@@ -9,10 +9,13 @@ A sleek, retro-styled Unix terminal shell for tracking tasks and projects direct
 Task Terminal supports dedicated user accounts backed by a cloud database (Upstash Redis / Vercel KV). Tasks you create on your desktop automatically sync to your phone, laptop, or any other browser you log into!
 
 ### Terminal Commands:
-- `register <username> <password>`: Create a free account. Your current tasks will automatically sync to your new cloud account.
+- `register <username> <password>`: Create a free cloud account. Your current tasks automatically sync.
 - `login <username> <password>`: Log in on any device (phone, laptop, iPad, work PC) to immediately load your synced tasks.
 - `logout`: Log out and return to local guest mode.
-- `whoami`: Display current session username, ID, and cloud sync status.
+- `whoami`: Display current session username, user ID, and cloud sync status.
+- `passwd <old_password> <new_password>`: Change your account password across all devices.
+- `change_username <new_username> <password>`: Rename your username (all tasks are preserved).
+- `delete_account <password> --confirm`: Permanently delete your cloud account and all cloud tasks.
 - `sync`: Force an immediate push & pull sync with the cloud database.
 
 *(If you don't log in, Task Terminal still works seamlessly in offline/guest mode using local browser storage).*
@@ -72,6 +75,9 @@ To enable multi-device sync across all your devices:
 | `login` / `signin` | `<user> <pass>` | Log into your account from any phone or computer |
 | `logout` | | Sign out and return to guest mode |
 | `whoami` | | Display current user, session, and sync state |
+| `passwd` | `<old> <new>` | Change your cloud account password |
+| `change_username` | `<new> <pass>` | Rename your account username (tasks preserved) |
+| `delete_account` | `<pass> --confirm` | Permanently delete account and all cloud tasks |
 | `sync` | | Manually sync local and cloud databases |
 | `help` / `?` | | Display all available terminal commands |
 | `man` | `<command>` | View manual page, synopsis, and examples for a command |
