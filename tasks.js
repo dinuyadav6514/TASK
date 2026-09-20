@@ -15,7 +15,6 @@ let cloudSyncing = false;
 let lastCloudSyncTime = null;
 let cloudSyncError = null;
 let cloudDebounceTimer = null;
-let seededFromHttp = false; // true when state was pre-loaded from tasks_data.json HTTP seed (not user-created)
 
 let state = {
   tasks: [],       // { id, name, category, status, createdAt, dueDate, notes, history: [{date, action, note}], progress }
