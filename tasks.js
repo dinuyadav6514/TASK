@@ -15,6 +15,7 @@ let cloudSyncing = false;
 let lastCloudSyncTime = null;
 let cloudSyncError = null;
 let cloudDebounceTimer = null;
+let seededFromHttp = false; // true when state was pre-loaded from tasks_data.json HTTP seed (not user-created)
 
 let state = {
   tasks: [],       // { id, name, category, status, createdAt, dueDate, notes, history: [{date, action, note}], progress }
@@ -154,7 +155,9 @@ function printSpacer() {
 function printEcho(cmdText) {
   const div = document.createElement("div");
   div.className = "echo-line";
-  div.innerHTML = `<span class="echo-prompt">guest@tasks:~$</span> ${escapeHtml(cmdText)}`;
+  const userLabel = currentUser ? `${currentUser.username}@tasks` : "guest@tasks";
+  const pathLabel = currentDir === "~" ? "~" : `~/${currentDir}`;
+  div.innerHTML = `<span class="echo-prompt">${escapeHtml(userLabel)}:${escapeHtml(pathLabel)}$</span> ${escapeHtml(cmdText)}`;
   output.appendChild(div);
   scrollToBottom();
 }
@@ -458,9 +461,13 @@ async function persist() {
 
   // 1. Always keep localStorage updated as immediate backup
   try {
-    const key = currentUser ? `${LS_FALLBACK_KEY}_${currentUser.username}` : LS_FALLBACK_KEY;
-    localStorage.setItem(key, json);
-    localStorage.setItem(LS_FALLBACK_KEY, json);
+    if (currentUser) {
+      // Cloud user: write ONLY to user-specific key. Never touch the shared guest key.
+      localStorage.setItem(`${LS_FALLBACK_KEY}_${currentUser.username}`, json);
+    } else {
+      // Guest mode: write to the shared key so it persists across reloads.
+      localStorage.setItem(LS_FALLBACK_KEY, json);
+    }
   } catch (err) {
     /* ignore storage quota errors */
   }
@@ -566,9 +573,12 @@ async function loadFromHttpFile() {
   return false;
 }
 
-async function loadFromFallback() {
+async function loadFromFallback(username) {
   try {
-    const raw = localStorage.getItem(LS_FALLBACK_KEY);
+    // If a username is provided (logged-in offline fallback), read from user-specific key.
+    // Otherwise read from the shared guest key — never cross-contaminate.
+    const key = username ? `${LS_FALLBACK_KEY}_${username}` : LS_FALLBACK_KEY;
+    const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.tasks)) {
@@ -736,17 +746,19 @@ async function cmdRegister(username, password) {
     localStorage.setItem(AUTH_TOKEN_KEY, data.token);
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
     currentUser = data.user;
-    updatePrompt();
 
-    // If user already has local tasks, sync them to the new cloud account
-    if (state.tasks.length > 0) {
-      await saveCloudTasks(data.token, state);
-      printLine(`[✓] ${data.message}`, "green");
-      printLine(`[✓] Synced ${state.tasks.length} existing task(s) to your new cloud account.`, "green");
-    } else {
-      printLine(`[✓] ${data.message}`, "green");
-      printLine(`Your cloud workspace is ready. Tasks you create here will automatically sync across any device you log into!`, "dim");
-    }
+    // A newly registered profile always starts with its own clean workspace
+    state = { tasks: [], categories: ["general"], meta: { version: 2 } };
+    ensureCategories();
+    try {
+      localStorage.setItem(`${LS_FALLBACK_KEY}_${currentUser.username}`, JSON.stringify(state, null, 2));
+    } catch (e) {}
+    await saveCloudTasks(data.token, state);
+
+    updatePrompt();
+    printLine(`[✓] ${data.message}`, "green");
+    printLine(`Your cloud workspace is ready (0 tasks). Tasks you create here will automatically sync across any device you log into!`, "dim");
+
     lastCloudSyncTime = new Date();
     cloudSyncError = null;
     updateSaveStatus();
@@ -773,20 +785,23 @@ async function cmdLogin(username, password) {
     printLine("Fetching your cloud tasks...", "dim");
     const cloudData = await fetchCloudTasks(data.token);
     if (cloudData && Array.isArray(cloudData.tasks)) {
-      if (cloudData.isNew && state.tasks.length > 0) {
-        // Upload existing local tasks to fresh cloud account
-        await saveCloudTasks(data.token, state);
-        printLine(`[✓] Synced ${state.tasks.length} task(s) to cloud.`, "green");
-      } else {
-        state = {
-          tasks: cloudData.tasks,
-          categories: Array.isArray(cloudData.categories) ? cloudData.categories : ["general"],
-          meta: cloudData.meta || { version: 2 },
-        };
-        ensureCategories();
-        printLine(`[✓] Loaded ${state.tasks.length} task(s) from cloud.`, "green");
-      }
+      state = {
+        tasks: cloudData.tasks,
+        categories: Array.isArray(cloudData.categories) ? cloudData.categories : ["general"],
+        meta: cloudData.meta || { version: 2 },
+      };
+      ensureCategories();
+      printLine(`[✓] Loaded ${state.tasks.length} task(s) from cloud account.`, "green");
+    } else {
+      state = { tasks: [], categories: ["general"], meta: { version: 2 } };
+      ensureCategories();
+      printLine(`[✓] Cloud account ready (0 tasks).`, "green");
     }
+    // Update offline backup for this specific profile
+    try {
+      localStorage.setItem(`${LS_FALLBACK_KEY}_${currentUser.username}`, JSON.stringify(state, null, 2));
+    } catch (e) {}
+
     lastCloudSyncTime = new Date();
     cloudSyncError = null;
     updateSaveStatus();
@@ -795,7 +810,7 @@ async function cmdLogin(username, password) {
   }
 }
 
-function cmdLogout() {
+async function cmdLogout() {
   if (!currentUser) {
     printLine("You are currently in guest mode (not logged in).", "dim");
     return;
@@ -804,9 +819,17 @@ function cmdLogout() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
   localStorage.removeItem(AUTH_USER_KEY);
   currentUser = null;
+
+  // Restore isolated guest workspace from guest storage
+  const restored = await loadFromFallback();
+  if (!restored) {
+    state = { tasks: [], categories: ["general"], meta: { version: 2 } };
+  }
+  ensureCategories();
+
   updatePrompt();
   updateSaveStatus();
-  printLine(`[✓] Logged out from ${prevUser}. Switched back to guest mode.`, "green");
+  printLine(`[✓] Logged out from ${escapeHtml(prevUser)}. Switched back to guest mode (${state.tasks.length} guest tasks).`, "green");
 }
 
 async function cmdWhoami() {
@@ -902,12 +925,23 @@ async function cmdChangeUsername(newUsername, password) {
     printLine("[error] Active session token not found. Please log in again.", "red");
     return;
   }
+  const oldUsername = currentUser.username;
   printLine(`Changing username to '${escapeHtml(newUsername)}'...`, "dim");
   try {
     const data = await changeUserName(token, newUsername, password);
     localStorage.setItem(AUTH_TOKEN_KEY, data.token);
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
     currentUser = data.user;
+
+    // Migrate offline backup to new username key
+    try {
+      const oldBackup = localStorage.getItem(`${LS_FALLBACK_KEY}_${oldUsername}`);
+      if (oldBackup) {
+        localStorage.setItem(`${LS_FALLBACK_KEY}_${currentUser.username}`, oldBackup);
+        localStorage.removeItem(`${LS_FALLBACK_KEY}_${oldUsername}`);
+      }
+    } catch (e) {}
+
     updatePrompt();
     updateSaveStatus();
     printLine(`[✓] ${data.message}`, "green");
@@ -935,12 +969,24 @@ async function cmdDeleteAccount(password, confirmFlag) {
     printLine("[error] Missing session token. Please log in again.", "red");
     return;
   }
+  const deletingUser = currentUser.username;
   printLine("Deleting account and cloud tasks from database...", "dim");
   try {
     const data = await deleteUserAccount(token, password);
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
+    try {
+      localStorage.removeItem(`${LS_FALLBACK_KEY}_${deletingUser}`);
+    } catch (e) {}
     currentUser = null;
+
+    // Restore guest workspace
+    const restored = await loadFromFallback();
+    if (!restored) {
+      state = { tasks: [], categories: ["general"], meta: { version: 2 } };
+    }
+    ensureCategories();
+
     updatePrompt();
     updateSaveStatus();
     printLine(`[✓] ${data.message}`, "green");
@@ -2969,7 +3015,7 @@ async function handleCommand(raw) {
       break;
     case "logout":
     case "signout":
-      cmdLogout();
+      await cmdLogout();
       break;
     case "passwd":
     case "change_password":
@@ -3289,7 +3335,7 @@ async function runBootSequence() {
         } catch (fetchErr) {
           cloudSyncError = fetchErr.message;
           printLine(`[warn] Could not reach cloud database (${fetchErr.message}). Using offline backup.`, "boot-line");
-          await loadFromFallback();
+          await loadFromFallback(currentUser.username);
         }
       } else {
         localStorage.removeItem(AUTH_TOKEN_KEY);
@@ -3315,18 +3361,10 @@ async function runBootSequence() {
       if (restored && state.tasks.length > 0) {
         printLine(`Restored ${state.tasks.length} task(s) from browser storage [ OK ]`, "boot-line");
       } else {
-        // First-time visit: seed from tasks_data.json via HTTP fetch
-        const httpLoaded = await loadFromHttpFile();
-        if (httpLoaded && state.tasks.length > 0) {
-          try {
-            localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(state, null, 2));
-          } catch (e) {}
-          usingFallback = true;
-          printLine(`Pre-loaded ${state.tasks.length} task(s) from ${DB_FILENAME} [ OK ]`, "boot-line");
-        } else {
-          usingFallback = true;
-          printLine(`Ready with fresh task workspace.`, "boot-line");
-        }
+        // First-time visit: start with clean empty workspace
+        state = { tasks: [], categories: ["general"], meta: { version: 2 } };
+        usingFallback = true;
+        printLine(`Ready with fresh task workspace.`, "boot-line");
       }
     }
   }
